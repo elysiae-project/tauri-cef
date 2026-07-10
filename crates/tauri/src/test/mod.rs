@@ -170,7 +170,6 @@ pub fn mock_builder() -> Builder<MockRuntime> {
     os_name: std::env::consts::OS,
     fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
     invoke_key: INVOKE_KEY,
-    cef: false,
   }
   .render_default(&Default::default())
   .unwrap()

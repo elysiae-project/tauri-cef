@@ -1561,7 +1561,6 @@ pub(crate) struct InvokeInitializationScript<'a> {
   pub(crate) os_name: &'a str,
   pub(crate) fetch_channel_data_command: &'a str,
   pub(crate) invoke_key: &'a str,
-  pub(crate) cef: bool,
 }
 
 /// Make `Wry` the default `Runtime` for `Builder`
@@ -1605,7 +1604,6 @@ impl<R: Runtime> Builder<R> {
         os_name: std::env::consts::OS,
         fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
         invoke_key: &invoke_key.clone(),
-        cef: cfg!(feature = "cef"),
       }
       .render_default(&Default::default())
       .unwrap()
