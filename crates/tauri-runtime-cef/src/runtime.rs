@@ -1033,14 +1033,6 @@ wrap_app! {
 }
 
 pub fn run_cef_helper_process() {
-  // Ensure this subprocess dies when the browser process exits.
-  // Without this, CEF child processes (renderer, GPU, zygote, utility)
-  // are orphaned if the parent is killed (SIGKILL, crash, SIGTERM).
-  #[cfg(target_os = "linux")]
-  unsafe {
-    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-  }
-
   let args = cef::args::Args::new();
 
   #[cfg(all(target_os = "macos", feature = "sandbox"))]
