@@ -17,7 +17,8 @@
   let customProtocolIpcFailed = false
 
   // on Android we never use it because Android does not have support to reading the request body
-  const canUseCustomProtocol = osName !== 'android'
+  // on CEF the ipc.localhost custom protocol is not reliably intercepted, so use postMessage directly
+  const canUseCustomProtocol = osName !== 'android' && !__TEMPLATE_cef__
 
   function sendIpcMessage(message) {
     const { cmd, callback, error, payload, options } = message
