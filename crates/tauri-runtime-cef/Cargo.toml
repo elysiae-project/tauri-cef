@@ -11,9 +11,9 @@ rust-version.workspace = true
 
 [dependencies]
 base64 = "0.22"
-cef = { version = "=148.0.0", features = ["build-util", "linux-x11"] }
+cef = { version = "=150.0.0", features = ["build-util", "linux-x11", "accelerated_osr"] }
 # Not actually used directly, just locking it.
-cef-dll-sys = { version = "=148.0.0", default-features = false }
+cef-dll-sys = { version = "=150.0.0", default-features = false }
 dirs = "6"
 dioxus-debug-cell = "0.1"
 http = "1"
@@ -87,9 +87,15 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 
 [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
 dlopen2 = { version = "0.8", features = ["derive"] }
+gdkwayland-sys = "0.18"
 gtk = { version = "0.18", features = ["v3_24"] }
 libc = "0.2"
 x11-dl = "2.21"
+ash = "0.38"
+wgpu = "29"
+pollster = "1"
+bytemuck = "1"
+softbuffer = { version = "0.4", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "x11-dlopen"] }
 
 [features]
 default = ["sandbox"]
