@@ -1033,6 +1033,14 @@ wrap_app! {
 }
 
 pub fn run_cef_helper_process() {
+  // Ensure this subprocess dies when the browser process exits.
+  // CEF subprocesses are separate fork()ed processes (not threads),
+  // so PR_SET_PDEATHSIG fires when the browser *process* dies.
+  #[cfg(target_os = "linux")]
+  unsafe {
+    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+  }
+
   let args = cef::args::Args::new();
 
   #[cfg(all(target_os = "macos", feature = "sandbox"))]
