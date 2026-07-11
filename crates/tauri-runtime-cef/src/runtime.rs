@@ -1033,6 +1033,11 @@ wrap_app! {
 }
 
 pub fn run_cef_helper_process() {
+  #[cfg(target_os = "linux")]
+  unsafe {
+    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+  }
+
   let args = cef::args::Args::new();
 
   #[cfg(all(target_os = "macos", feature = "sandbox"))]
