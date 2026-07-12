@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use winit::window::Window as WinitWindow;
 
 pub(crate) struct SendRawWindowHandle(pub raw_window_handle::RawWindowHandle);
@@ -13,14 +13,14 @@ unsafe impl Send for SendRawWindowHandle {}
 pub(crate) struct SendRawDisplayHandle(pub raw_window_handle::RawDisplayHandle);
 unsafe impl Send for SendRawDisplayHandle {}
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SoftbufferWindowHandle {
   display: RawDisplayHandle,
   window: RawWindowHandle,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 impl SoftbufferWindowHandle {
   pub(crate) fn new(window: &dyn WinitWindow) -> Option<Self> {
     Some(Self {
@@ -30,7 +30,7 @@ impl SoftbufferWindowHandle {
   }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 impl HasDisplayHandle for SoftbufferWindowHandle {
   fn display_handle(
     &self,
@@ -39,7 +39,7 @@ impl HasDisplayHandle for SoftbufferWindowHandle {
   }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 impl HasWindowHandle for SoftbufferWindowHandle {
   fn window_handle(
     &self,

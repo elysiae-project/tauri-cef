@@ -36,6 +36,7 @@ use winit::{
   event::{StartCause, WindowEvent as WinitWindowEvent},
   event_loop::{
     ActiveEventLoop, EventLoop, EventLoopBuilder, EventLoopProxy as WinitEventLoopProxy,
+    pump_events::EventLoopExtPumpEvents,
   },
   window::WindowId as WinitWindowId,
 };
@@ -56,6 +57,14 @@ use crate::{
 };
 #[cfg(target_os = "macos")]
 use winit::platform::macos::EventLoopBuilderExtMacOS;
+#[cfg(any(
+  target_os = "linux",
+  target_os = "dragonfly",
+  target_os = "freebsd",
+  target_os = "netbsd",
+  target_os = "openbsd"
+))]
+use winit::platform::wayland::EventLoopBuilderExtWayland;
 #[cfg(windows)]
 use winit::platform::windows::EventLoopBuilderExtWindows;
 #[cfg(any(
@@ -151,6 +160,17 @@ pub(crate) struct RuntimeContext<T: UserEvent> {
   /// [`cef::initialize`]. Per-webview `data_directory` profiles must resolve
   /// under this root for CEF request contexts to be accepted.
   pub(crate) cache_path: Arc<PathBuf>,
+  pub(crate) osr_mode: bool,
+  #[cfg(target_os = "linux")]
+  pub(crate) gpu_ctx: Option<Arc<crate::platform::linux::gpu::GpuContext>>,
+  #[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  ))]
+  pub(crate) osr_scale_factor: Arc<Mutex<Option<f64>>>,
 }
 
 /// Scoped access to the current winit callback state.
@@ -442,11 +462,54 @@ pub(crate) struct AppState<T: UserEvent> {
   pub(crate) exiting: bool,
 }
 
+#[cfg(any(
+  target_os = "linux",
+  target_os = "dragonfly",
+  target_os = "freebsd",
+  target_os = "netbsd",
+  target_os = "openbsd"
+))]
+struct ScaleCapture {
+  scale: Option<f64>,
+}
+
+#[cfg(any(
+  target_os = "linux",
+  target_os = "dragonfly",
+  target_os = "freebsd",
+  target_os = "netbsd",
+  target_os = "openbsd"
+))]
+impl ApplicationHandler for ScaleCapture {
+  fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+    self.scale = event_loop
+      .primary_monitor()
+      .map(|m| m.scale_factor())
+      .or_else(|| {
+        event_loop
+          .available_monitors()
+          .map(|m| m.scale_factor())
+          .find(|s| *s > 1.0)
+      });
+    event_loop.exit();
+  }
+
+  fn window_event(
+    &mut self,
+    _event_loop: &dyn ActiveEventLoop,
+    _window_id: winit::window::WindowId,
+    _event: winit::event::WindowEvent,
+  ) {
+  }
+}
+
 pub(crate) struct WinitCefApp<T: UserEvent> {
   pub(crate) context: RuntimeContext<T>,
   receiver: Receiver<Message<T>>,
   pub(crate) state: AppState<T>,
   pub(crate) scheme_registry: request_handler::SchemeRegistry,
+  #[cfg(target_os = "linux")]
+  modifiers: std::cell::RefCell<winit::event::Modifiers>,
 }
 
 impl<T: UserEvent> WinitCefApp<T> {
@@ -467,6 +530,8 @@ impl<T: UserEvent> WinitCefApp<T> {
         exiting: false,
       },
       scheme_registry,
+      #[cfg(target_os = "linux")]
+      modifiers: std::cell::RefCell::new(winit::event::Modifiers::default()),
     }
   }
 
@@ -893,7 +958,6 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
 
   fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
     let _guard = self.install_current_dispatch(event_loop);
-    // TODO: remove once migrated to winit-gtk4
     #[cfg(any(
       target_os = "linux",
       target_os = "dragonfly",
@@ -901,7 +965,21 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
       target_os = "netbsd",
       target_os = "openbsd"
     ))]
-    self.service_glib(event_loop);
+    {
+      self.service_glib(event_loop);
+      #[cfg(target_os = "linux")]
+      if self.context.osr_mode {
+        for appwindow in self.state.windows.values_mut() {
+          for child in &appwindow.children {
+            if let Some(osr) = &child.osr_state
+              && osr.take_needs_redraw()
+            {
+              appwindow.window.request_redraw();
+            }
+          }
+        }
+      }
+    }
     self.run_callback(RunEvent::MainEventsCleared);
   }
 
@@ -930,6 +1008,10 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
       }
       WinitWindowEvent::SurfaceResized(size) => {
         webview::layout_app_window(appwindow);
+        #[cfg(target_os = "linux")]
+        if self.context.osr_mode {
+          appwindow.osr_resize(size);
+        }
         self.emit_window_event(window_id, WindowEvent::Resized(size));
       }
       WinitWindowEvent::ScaleFactorChanged {
@@ -940,6 +1022,21 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
           .surface_size()
           .unwrap_or_else(|_| appwindow.window.surface_size());
         webview::layout_app_window(appwindow);
+        #[cfg(target_os = "linux")]
+        if self.context.osr_mode {
+          for child in &appwindow.children {
+            if let Some(state) = &child.osr_state {
+              state.set_scale_factor(scale_factor);
+              let logical_w = ((new_inner_size.width as f64) / scale_factor).round() as i32;
+              let logical_h = ((new_inner_size.height as f64) / scale_factor).round() as i32;
+              state.set_view_size(logical_w.max(1), logical_h.max(1));
+              child.host.notify_move_or_resize_started();
+              child.host.notify_screen_info_changed();
+              child.host.was_resized();
+              state.send_device_metrics(&child.host);
+            }
+          }
+        }
         self.emit_window_event(
           window_id,
           WindowEvent::ScaleFactorChanged {
@@ -956,6 +1053,10 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
       }
       WinitWindowEvent::Focused(focused) => {
         self.emit_window_event(window_id, WindowEvent::Focused(focused));
+      }
+      #[cfg(target_os = "linux")]
+      WinitWindowEvent::ModifiersChanged(mods) => {
+        *self.modifiers.borrow_mut() = mods;
       }
       WinitWindowEvent::ThemeChanged(theme) => {
         let system_theme = winit_theme_to_tauri_theme(theme);
@@ -983,7 +1084,48 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
       WinitWindowEvent::RedrawRequested => {
         appwindow.draw_background_surface();
       }
-      _ => {}
+      #[cfg(target_os = "linux")]
+      WinitWindowEvent::RedrawRequested => {
+        appwindow.draw_osr_surface();
+      }
+      #[cfg(target_os = "linux")]
+      WinitWindowEvent::KeyboardInput { .. } => {
+        if self.context.osr_mode {
+          let mods = self.modifiers.borrow();
+          if let Some(child) = appwindow.children.first() {
+            let scale_factor = child
+              .osr_state
+              .as_ref()
+              .map(|s| *s.scale_factor.lock().unwrap())
+              .unwrap_or(1.0);
+            crate::cef_impl::input::forward_to_host(&child.host, &event, *mods, scale_factor);
+          }
+        }
+      }
+      #[cfg(target_os = "linux")]
+      _ => {
+        if self.context.osr_mode
+          && matches!(
+            event,
+            WinitWindowEvent::PointerMoved { .. }
+              | WinitWindowEvent::PointerLeft { .. }
+              | WinitWindowEvent::PointerButton { .. }
+              | WinitWindowEvent::MouseWheel { .. }
+              | WinitWindowEvent::KeyboardInput { .. }
+              | WinitWindowEvent::Focused(_)
+          )
+        {
+          let modifiers = *self.modifiers.borrow();
+          if let Some(child) = appwindow.children.first() {
+            let scale_factor = child
+              .osr_state
+              .as_ref()
+              .map(|s| *s.scale_factor.lock().unwrap())
+              .unwrap_or(1.0);
+            crate::cef_impl::input::forward_to_host(&child.host, &event, modifiers, scale_factor);
+          }
+        }
+      }
     }
   }
 }
@@ -1011,21 +1153,43 @@ wrap_app! {
 
     fn on_before_command_line_processing(
       &self,
-      _process_type: Option<&CefString>,
+      process_type: Option<&CefString>,
       command_line: Option<&mut CommandLine>,
     ) {
       if let Some(command_line) = command_line {
+        let pt = process_type.map(|s| s.to_string()).unwrap_or_default();
+        let is_browser_or_gpu = pt.is_empty() || pt.contains("gpu");
         for (arg, value) in &self.command_line_args {
+          let name = arg.trim_start_matches('-');
+          if !is_browser_or_gpu
+            && (name == "ozone-platform"
+              || name == "disable-vulkan"
+              || name == "ignore-gpu-blocklist"
+              || name == "enable-gpu-rasterization"
+              || name == "enable-zero-copy"
+              || name == "enable-features")
+          {
+            continue;
+          }
           if let Some(value) = value {
             command_line.append_switch_with_value(
-              Some(&CefString::from(arg.as_str())),
+              Some(&CefString::from(name)),
               Some(&CefString::from(value.as_str())),
             );
-          } else if arg.starts_with("-") {
-            command_line.append_switch(Some(&CefString::from(arg.as_str())));
           } else {
-            command_line.append_argument(Some(&CefString::from(arg.as_str())));
+            command_line.append_switch(Some(&CefString::from(name)));
           }
+        }
+
+        #[cfg(any(
+          target_os = "linux",
+          target_os = "dragonfly",
+          target_os = "freebsd",
+          target_os = "netbsd",
+          target_os = "openbsd"
+        ))]
+        {
+          let _ = &self.context.osr_scale_factor;
         }
       }
     }
@@ -1033,6 +1197,9 @@ wrap_app! {
 }
 
 pub fn run_cef_helper_process() {
+  // Ensure this subprocess dies when the browser process exits.
+  // CEF subprocesses are separate fork()ed processes (not threads),
+  // so PR_SET_PDEATHSIG fires when the browser *process* dies.
   #[cfg(target_os = "linux")]
   unsafe {
     libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
@@ -1295,7 +1462,27 @@ impl<T: UserEvent> CefRuntime<T> {
     });
     let _ = create_dir_all(&cache_path);
 
-    // Force X11 usage on Linux
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    ))]
+    let osr_mode =
+      std::env::var("WAYLAND_DISPLAY").is_ok() && std::env::var("ELYSIAE_FORCE_X11").is_err();
+
+    #[cfg(not(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    )))]
+    let osr_mode = false;
+
+    command_line_args.push(("--lang".to_string(), Some("en-US".to_string())));
+
     #[cfg(any(
       target_os = "linux",
       target_os = "dragonfly",
@@ -1304,9 +1491,31 @@ impl<T: UserEvent> CefRuntime<T> {
       target_os = "openbsd"
     ))]
     {
-      command_line_args.push(("ozone-platform".to_string(), Some("x11".to_string())));
-      event_loop_builder.with_x11();
+      let use_wayland = osr_mode
+        || (std::env::var("WAYLAND_DISPLAY").is_ok()
+          && std::env::var("ELYSIAE_FORCE_X11").is_err());
+
+      if use_wayland {
+        unsafe {
+          std::env::set_var("GDK_BACKEND", "wayland");
+        }
+        let _ = gtk::init();
+        command_line_args.push(("ozone-platform".to_string(), Some("wayland".to_string())));
+        event_loop_builder.with_wayland();
+      } else {
+        command_line_args.push(("ozone-platform".to_string(), Some("x11".to_string())));
+        event_loop_builder.with_x11();
+      }
     }
+
+    #[cfg(target_os = "linux")]
+    let gpu_ctx = if osr_mode {
+      crate::platform::linux::gpu::GpuContext::new()
+    } else {
+      None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let gpu_ctx: Option<Arc<crate::platform::linux::gpu::GpuContext>> = None;
 
     #[cfg(windows)]
     if let Some(hook) = runtime_args.msg_hook {
@@ -1317,7 +1526,7 @@ impl<T: UserEvent> CefRuntime<T> {
     #[cfg(target_os = "macos")]
     event_loop_builder.with_default_menu(false);
 
-    let event_loop = event_loop_builder
+    let mut event_loop = event_loop_builder
       .build()
       .map_err(|_| Error::CreateWindow)?;
     let proxy = event_loop.create_proxy();
@@ -1345,9 +1554,43 @@ impl<T: UserEvent> CefRuntime<T> {
       app_wide_theme: Default::default(),
       cef_pump,
       cache_path: Arc::new(cache_path.clone()),
+      osr_mode,
+      #[cfg(target_os = "linux")]
+      gpu_ctx,
+      #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+      ))]
+      osr_scale_factor: Arc::new(Mutex::new(None)),
     };
 
+    // On Linux Wayland OSR mode, pump the event loop once to query the
+    // monitor scale factor before cef::initialize() — on_before_command_line_processing
+    // needs it for --force-device-scale-factor at fractional scales.
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    ))]
+    if osr_mode {
+      let mut capture = ScaleCapture { scale: None };
+      event_loop.pump_app_events(None, &mut capture);
+      if let Some(scale) = capture.scale
+        && scale > 1.0
+      {
+        *context.osr_scale_factor.lock().unwrap() = Some(scale);
+      }
+    }
+
     command_line_args.push(("--enable-media-stream".to_string(), None));
+
+    #[cfg(debug_assertions)]
+    command_line_args.push(("--remote-allow-origins".to_string(), Some("*".to_string())));
     let mut app = TauriCefApp::new(
       context.clone(),
       context_initialized.clone(),
@@ -1371,6 +1614,10 @@ impl<T: UserEvent> CefRuntime<T> {
       no_sandbox: !cfg!(feature = "sandbox") as i32,
       cache_path: cache_path.to_string_lossy().to_string().as_str().into(),
       external_message_pump: 1,
+      windowless_rendering_enabled: osr_mode as i32,
+      remote_debugging_port: if cfg!(debug_assertions) { 9222 } else { 0 },
+      locale: cef::CefString::from("en-US"),
+      accept_language_list: cef::CefString::from("en-US,en"),
       ..Default::default()
     };
     if cef::initialize(
@@ -1453,7 +1700,7 @@ impl<T: UserEvent> Runtime<T> for CefRuntime<T> {
   ))]
   fn new_any_thread(args: RuntimeInitArgs<Self::PlatformSpecificInitAttribute>) -> Result<Self> {
     let mut event_loop_builder = EventLoopBuilder::default();
-    event_loop_builder.with_any_thread(true);
+    EventLoopBuilderExtX11::with_any_thread(&mut event_loop_builder, true);
     Self::init(event_loop_builder, args)
   }
 

@@ -6,12 +6,13 @@ use std::sync::Arc;
 
 use cef::*;
 
-use crate::webview::INITIAL_LOAD_URL;
+use crate::{cef_impl::render_handler::OsrState, webview::INITIAL_LOAD_URL};
 
 wrap_display_handler! {
   pub struct TauriCefDisplayHandler {
     document_title_changed_handler: Option<Arc<tauri_runtime::webview::DocumentTitleChangedHandler>>,
     address_changed_handler: Option<Arc<tauri_runtime::webview::AddressChangedHandler>>,
+    osr_state: Option<Arc<OsrState>>,
   }
 
   impl DisplayHandler {
@@ -36,7 +37,6 @@ wrap_display_handler! {
       frame: Option<&mut Frame>,
       url: Option<&CefString>,
     ) {
-      // Only fire for main frame URL changes (matches on_before_browse behavior).
       if let Some(frame) = frame
         && frame.is_main() == 0
       {
@@ -57,6 +57,19 @@ wrap_display_handler! {
       if let Ok(url) = url::Url::parse(&url) {
         handler(&url);
       }
+    }
+
+    fn on_cursor_change(
+      &self,
+      _browser: Option<&mut Browser>,
+      _cursor: std::os::raw::c_ulong,
+      type_: CursorType,
+      _custom_cursor_info: Option<&CursorInfo>,
+    ) -> std::os::raw::c_int {
+      if let Some(state) = &self.osr_state {
+        *state.cursor.lock().unwrap() = Some(type_);
+      }
+      0
     }
   }
 }

@@ -4,11 +4,13 @@
 
 use std::sync::Arc;
 
+use crate::cef_impl::render_handler::OsrState;
 use cef::*;
 
 wrap_load_handler! {
   pub struct TauriCefLoadHandler {
     on_page_load_handler: Option<Arc<tauri_runtime::webview::OnPageLoadHandler>>,
+    osr_state: Option<Arc<OsrState>>,
   }
 
   impl LoadHandler {
@@ -18,9 +20,6 @@ wrap_load_handler! {
       frame: Option<&mut Frame>,
       _transition_type: TransitionType,
     ) {
-      let Some(handler) = &self.on_page_load_handler else {
-        return;
-      };
       let Some(frame) = frame else {
         return;
       };
@@ -28,6 +27,10 @@ wrap_load_handler! {
       if frame.is_main() == 0 {
         return;
       }
+
+      let Some(handler) = &self.on_page_load_handler else {
+        return;
+      };
 
       let url = cef::CefString::from(&frame.url()).to_string();
       if let Ok(url) = url::Url::parse(&url) {
@@ -37,13 +40,10 @@ wrap_load_handler! {
 
     fn on_load_end(
       &self,
-      _browser: Option<&mut Browser>,
+      browser: Option<&mut Browser>,
       frame: Option<&mut Frame>,
       _http_status_code: ::std::os::raw::c_int,
     ) {
-      let Some(handler) = &self.on_page_load_handler else {
-        return;
-      };
       let Some(frame) = frame else {
         return;
       };
@@ -51,6 +51,17 @@ wrap_load_handler! {
       if frame.is_main() == 0 {
         return;
       }
+
+      if let Some(browser) = browser
+        && let Some(osr_state) = &self.osr_state
+        && let Some(host) = browser.host()
+      {
+        osr_state.send_device_metrics(&host);
+      }
+
+      let Some(handler) = &self.on_page_load_handler else {
+        return;
+      };
 
       let url = cef::CefString::from(&frame.url()).to_string();
       if let Ok(url) = url::Url::parse(&url) {

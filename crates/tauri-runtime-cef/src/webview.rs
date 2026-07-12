@@ -200,6 +200,7 @@ pub(crate) struct AppWebview {
   pub(crate) devtools_observer_registration: Arc<Mutex<Option<cef::Registration>>>,
   pub(crate) listeners: WebviewEventListeners,
   pub(crate) bounds_rate: Option<BoundsRate>,
+  pub(crate) osr_state: Option<Arc<crate::cef_impl::render_handler::OsrState>>,
 }
 
 impl AppWebview {
@@ -284,7 +285,32 @@ impl<T: UserEvent> WinitCefApp<T> {
   ) -> Result<()> {
     let parent = appwindow.raw_cef_handle();
     let parent_size = appwindow.window.surface_size();
-    let scale = appwindow.window.scale_factor();
+    let scale = {
+      #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+      ))]
+      {
+        context
+          .osr_scale_factor
+          .lock()
+          .unwrap()
+          .unwrap_or_else(|| appwindow.window.scale_factor())
+      }
+      #[cfg(not(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+      )))]
+      {
+        appwindow.window.scale_factor()
+      }
+    };
     let app_wide_theme = *context.app_wide_theme.lock().unwrap();
     let theme = appwindow.resolved_theme(app_wide_theme);
     let Some(child) = Self::build_browser_child(
@@ -328,7 +354,31 @@ impl<T: UserEvent> WinitCefApp<T> {
       parent_size,
       scale,
     );
-    let initialization_scripts = initialization_scripts(&mut pending.webview_attributes);
+    let osr_scale = if context.osr_mode {
+      #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+      ))]
+      {
+        context.osr_scale_factor.lock().unwrap().or(Some(scale))
+      }
+      #[cfg(not(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+      )))]
+      {
+        Some(scale)
+      }
+    } else {
+      None
+    };
+    let initialization_scripts = initialization_scripts(&mut pending.webview_attributes, osr_scale);
     let uri_scheme_protocols: Arc<HashMap<_, _>> = Arc::new(
       pending
         .uri_scheme_protocols
@@ -362,6 +412,55 @@ impl<T: UserEvent> WinitCefApp<T> {
       web_content_process_terminate_handler,
     };
 
+    let bounds = pending.webview_attributes.bounds.unwrap_or_else(|| Rect {
+      position: PhysicalPosition::new(0, 0).into(),
+      size: parent_size.into(),
+    });
+
+    #[cfg(not(target_os = "macos"))]
+    let (bx, by, bw, bh): (i32, i32, i32, i32) = if context.osr_mode {
+      let b = bounds.to_physical::<i32, i32>(scale);
+      (b.position.x, b.position.y, b.size.width, b.size.height)
+    } else {
+      let b = bounds.to_logical::<i32, i32>(scale);
+      (b.position.x, b.position.y, b.size.width, b.size.height)
+    };
+    #[cfg(target_os = "macos")]
+    let (bx, by, bw, bh): (i32, i32, i32, i32) = {
+      let b = bounds.to_logical::<i32, i32>(scale);
+      (b.position.x, b.position.y, b.size.width, b.size.height)
+    };
+    let bounds = cef::Rect {
+      x: bx,
+      y: by,
+      width: bw,
+      height: bh,
+    };
+
+    let osr_state = context.osr_mode.then(|| {
+      #[cfg(not(target_os = "macos"))]
+      let (view_w, view_h) = {
+        let lw = ((bounds.width as f64) / scale).round() as i32;
+        let lh = ((bounds.height as f64) / scale).round() as i32;
+        (lw.max(1), lh.max(1))
+      };
+      #[cfg(target_os = "macos")]
+      let (view_w, view_h) = (bounds.width, bounds.height);
+
+      #[cfg(target_os = "linux")]
+      if let Some(ref gpu) = context.gpu_ctx {
+        return Arc::new(crate::cef_impl::render_handler::OsrState::new_with_gpu(
+          view_w,
+          view_h,
+          scale,
+          gpu.clone(),
+        ));
+      }
+      Arc::new(crate::cef_impl::render_handler::OsrState::new(
+        view_w, view_h, scale,
+      ))
+    });
+
     let mut client = browser_client::TauriCefBrowserClient::new(
       context.clone(),
       window_id,
@@ -373,28 +472,11 @@ impl<T: UserEvent> WinitCefApp<T> {
       drag_drop_handler_enabled,
       drag_drop_state,
       handlers,
+      osr_state.clone(),
       context.proxy.clone(),
       context.sender.clone(),
     );
 
-    // If the bounds are not specified, default to the parent window's size and position.
-    // aka full-window webview.
-    let bounds = pending.webview_attributes.bounds.unwrap_or_else(|| Rect {
-      position: PhysicalPosition::new(0, 0).into(),
-      size: parent_size.into(),
-    });
-    #[cfg(not(target_os = "macos"))]
-    let bounds = bounds.to_physical::<i32, i32>(scale);
-    #[cfg(target_os = "macos")]
-    let bounds = bounds.to_logical::<i32, i32>(scale);
-    let bounds = cef::Rect {
-      x: bounds.position.x,
-      y: bounds.position.y,
-      width: bounds.size.width,
-      height: bounds.size.height,
-    };
-
-    // Let CEF pick the runtime style unless overridden per-webview.
     let cef_runtime_style = pending
       .platform_specific_attributes
       .iter()
@@ -407,9 +489,24 @@ impl<T: UserEvent> WinitCefApp<T> {
       .next()
       .unwrap_or(cef::RuntimeStyle::DEFAULT);
 
-    let mut window_info = cef::WindowInfo::default().set_as_child(parent, &bounds);
+    let mut window_info = if context.osr_mode {
+      let mut wi = cef::WindowInfo::default().set_as_windowless(parent);
+      #[cfg(target_os = "linux")]
+      if context.gpu_ctx.is_some() {
+        wi.shared_texture_enabled = 1;
+      }
+      wi
+    } else {
+      cef::WindowInfo::default().set_as_child(parent, &bounds)
+    };
     window_info.runtime_style = cef_runtime_style;
-    let settings = browser_settings_from_webview_attributes(&pending.webview_attributes);
+    let settings = {
+      let mut s = browser_settings_from_webview_attributes(&pending.webview_attributes);
+      if context.osr_mode {
+        s.windowless_frame_rate = 240;
+      }
+      s
+    };
 
     let custom_protocol_scheme = if pending.webview_attributes.use_https_scheme {
       "https"
@@ -430,6 +527,7 @@ impl<T: UserEvent> WinitCefApp<T> {
       let custom_protocol_scheme = custom_protocol_scheme.clone();
       let custom_scheme_domain_names = custom_scheme_domain_names.clone();
       let label = pending.label.clone();
+      let osr_state = osr_state.clone();
       move |mut request_context| {
         request_context::apply_theme_scheme(request_context.as_ref(), theme);
 
@@ -452,6 +550,17 @@ impl<T: UserEvent> WinitCefApp<T> {
           return;
         };
         let browser_id = browser.identifier();
+
+        #[cfg(any(
+          target_os = "linux",
+          target_os = "dragonfly",
+          target_os = "freebsd",
+          target_os = "netbsd",
+          target_os = "openbsd"
+        ))]
+        if let Some(ref state) = osr_state {
+          state.send_device_metrics(&host);
+        }
 
         {
           let mut registry = scheme_registry.lock().unwrap();
@@ -495,6 +604,7 @@ impl<T: UserEvent> WinitCefApp<T> {
             devtools_observer_registration,
             listeners: Default::default(),
             bounds_rate,
+            osr_state,
           })
           .expect("failed to send initialized CEF browser");
       }
@@ -837,13 +947,18 @@ impl CefInitScript {
   }
 }
 
-pub(crate) fn initialization_scripts(attrs: &mut WebviewAttributes) -> Arc<Vec<CefInitScript>> {
+pub(crate) fn initialization_scripts(
+  attrs: &mut WebviewAttributes,
+  osr_scale: Option<f64>,
+) -> Arc<Vec<CefInitScript>> {
   let mut initialization_scripts = Vec::new();
 
   if attrs.drag_drop_handler_enabled {
     let drag_script = browser_client::drag_drop_initialization_script();
     initialization_scripts.push(CefInitScript::new(drag_script));
   }
+
+  let _ = osr_scale;
 
   initialization_scripts.extend(
     std::mem::take(&mut attrs.initialization_scripts)
@@ -1222,9 +1337,9 @@ impl<T: UserEvent> WebviewDispatch<T> for CefWebviewDispatcher<T> {
 /// they were last given.
 pub(crate) fn layout_app_window(appwindow: &AppWindow) {
   let parent_size = appwindow.window.surface_size();
+  let scale = appwindow.window.scale_factor();
   let win_w = parent_size.width as f32;
   let win_h = parent_size.height as f32;
-  let scale = appwindow.window.scale_factor();
   for child in &appwindow.children {
     let Some(rate) = child.bounds_rate else {
       continue;

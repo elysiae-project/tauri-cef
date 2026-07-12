@@ -89,8 +89,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 dlopen2 = { version = "0.8", features = ["derive"] }
 gdkwayland-sys = "0.18"
 gtk = { version = "0.18", features = ["v3_24"] }
-libc = "0.2"
 x11-dl = "2.21"
+libc = "0.2"
 ash = "0.38"
 wgpu = "29"
 pollster = "1"

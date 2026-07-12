@@ -42,7 +42,7 @@ use winit::platform::macos::WindowExtMacOS;
 #[cfg(windows)]
 use winit::platform::windows::WindowExtWindows;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::window_handle::SoftbufferWindowHandle;
 use crate::{
   cef_impl::{client as browser_client, request_context},
@@ -316,7 +316,7 @@ pub(crate) enum WindowMessage {
   StartResizeDragging(tauri_runtime::ResizeDirection),
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 type SoftbufferSurface = softbuffer::Surface<SoftbufferWindowHandle, SoftbufferWindowHandle>;
 
 pub(crate) struct AppWindow {
@@ -325,6 +325,13 @@ pub(crate) struct AppWindow {
   pub(crate) label: String,
   #[cfg(windows)]
   pub(crate) background_surface: Option<SoftbufferSurface>,
+  #[cfg(target_os = "linux")]
+  pub(crate) osr_surface: Option<SoftbufferSurface>,
+  #[cfg(target_os = "linux")]
+  pub(crate) gpu_surface: Option<crate::platform::linux::gpu::GpuSurface>,
+  #[cfg(target_os = "linux")]
+  pub(crate) gpu_ctx: Option<Arc<crate::platform::linux::gpu::GpuContext>>,
+  #[cfg(target_os = "linux")]
   pub(crate) window: Box<dyn WinitWindow>,
   pub(crate) attrs: AppWindowAttrs,
   pub(crate) children: Vec<AppWebview>,
@@ -437,6 +444,13 @@ impl<T: UserEvent> WinitCefApp<T> {
       label: pending.label.clone(),
       #[cfg(windows)]
       background_surface: None,
+      #[cfg(target_os = "linux")]
+      osr_surface: None,
+      #[cfg(target_os = "linux")]
+      gpu_surface: None,
+      #[cfg(target_os = "linux")]
+      gpu_ctx: self.context.gpu_ctx.clone(),
+      #[cfg(target_os = "linux")]
       window,
       attrs,
       children: Vec::new(),

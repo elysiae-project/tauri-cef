@@ -26,6 +26,15 @@ impl AppWebview {
   }
 
   pub(crate) fn bounds(&self) -> Option<Rect> {
+    if let Some(state) = self.osr_state.as_ref() {
+      let w = *state.view_width.lock().unwrap();
+      let h = *state.view_height.lock().unwrap();
+      return Some(Rect {
+        position: PhysicalPosition::new(0, 0).into(),
+        size: PhysicalSize::new(w as u32, h as u32).into(),
+      });
+    }
+
     let xid = self.xid();
 
     with_cef_display(None, |xlib, display| unsafe {
@@ -60,8 +69,14 @@ impl AppWebview {
   }
 
   pub(crate) fn reparent(&self, parent: &AppWindow) {
+    if self.osr_state.is_some() {
+      return;
+    }
+
     let xid = self.xid();
-    let parent_xid = parent.xid();
+    let Some(parent_xid) = parent.xid() else {
+      return;
+    };
 
     with_cef_display((), |xlib, display| unsafe {
       (xlib.XReparentWindow)(display, xid, parent_xid as xlib::Window, 0, 0);
@@ -70,6 +85,10 @@ impl AppWebview {
   }
 
   pub(crate) fn apply_visible(&self, visible: bool) {
+    if self.osr_state.is_some() {
+      return;
+    }
+
     let xid = self.xid();
 
     with_cef_display((), |xlib, display| unsafe {
@@ -105,7 +124,22 @@ impl AppWebview {
     });
   }
 
-  pub(crate) fn apply_physical_bounds(&self, _scale: f64, x: i32, y: i32, width: i32, height: i32) {
+  pub(crate) fn apply_physical_bounds(&self, scale: f64, x: i32, y: i32, width: i32, height: i32) {
+    if let Some(state) = &self.osr_state {
+      let logical_w = ((width as f64) / scale).round() as i32;
+      let logical_h = ((height as f64) / scale).round() as i32;
+      state.set_view_size(logical_w.max(1), logical_h.max(1));
+      state.send_device_metrics(&self.host);
+      return;
+    }
+
+    #[cfg(target_os = "linux")]
+    if std::env::var("WAYLAND_DISPLAY").is_ok() && std::env::var("ELYSIAE_FORCE_X11").is_err() {
+      self.host.notify_move_or_resize_started();
+      self.host.was_resized();
+      return;
+    }
+
     let xid = self.xid();
 
     with_cef_display((), |xlib, display| unsafe {
@@ -117,8 +151,6 @@ impl AppWebview {
         width.max(1) as u32,
         height.max(1) as u32,
       );
-      // `with_cef_display` issues an `XFlush` once the closure returns, so a
-      // blocking `XSync` round-trip here just stalls every resize frame.
     });
   }
 }

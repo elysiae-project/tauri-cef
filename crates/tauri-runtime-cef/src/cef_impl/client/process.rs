@@ -29,6 +29,14 @@ wrap_browser_process_handler! {
       self.context.cef_pump.schedule_message_pump_work(delay_ms);
     }
 
+    fn on_before_child_process_launch(&self, command_line: Option<&mut CommandLine>) {
+      let Some(command_line) = command_line else { return };
+      command_line.append_switch_with_value(
+        Some(&CefString::from("lang")),
+        Some(&CefString::from("en-US")),
+      );
+    }
+
     fn on_already_running_app_relaunch(
       &self,
       command_line: Option<&mut CommandLine>,

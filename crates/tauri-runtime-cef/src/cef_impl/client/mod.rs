@@ -9,7 +9,7 @@ use tauri_runtime::{UserEvent, window::WindowId};
 use winit::event_loop::EventLoopProxy as WinitEventLoopProxy;
 
 use crate::{
-  cef_impl::{ipc, request_handler},
+  cef_impl::{ipc, render_handler, request_handler},
   runtime::{CefRuntime, Message, RuntimeContext},
 };
 
@@ -17,13 +17,11 @@ mod context_menu;
 mod display;
 mod download;
 mod drag;
-mod keyboard;
 mod life_span;
 mod load;
 mod permission;
 mod process;
 
-use context_menu::TauriCefContextMenuHandler;
 use display::TauriCefDisplayHandler;
 use download::TauriCefDownloadHandler;
 use drag::TauriCefDragHandler;
@@ -31,7 +29,6 @@ pub(crate) use drag::{
   DragDropEventTarget, DragDropScriptEvent, DragDropState, WebDragDropResourceRequestHandler,
   drag_drop_initialization_script, event_from_script_event,
 };
-use keyboard::TauriCefKeyboardHandler;
 use life_span::TauriCefChildLifeSpanHandler;
 use load::TauriCefLoadHandler;
 use permission::TauriCefPermissionHandler;
@@ -77,6 +74,7 @@ wrap_client! {
     drag_drop_handler_enabled: bool,
     drag_drop_state: Arc<Mutex<DragDropState>>,
     pub(crate) handlers: TauriCefBrowserClientHandlers<T>,
+    osr_state: Option<Arc<render_handler::OsrState>>,
     proxy: WinitEventLoopProxy,
     sender: Sender<Message<T>>,
   }
@@ -116,6 +114,7 @@ wrap_client! {
     fn load_handler(&self) -> Option<LoadHandler> {
       Some(TauriCefLoadHandler::new(
         self.handlers.on_page_load_handler.clone(),
+        self.osr_state.clone(),
       ))
     }
 
@@ -123,6 +122,7 @@ wrap_client! {
       Some(TauriCefDisplayHandler::new(
         self.handlers.document_title_changed_handler.clone(),
         self.handlers.address_changed_handler.clone(),
+        self.osr_state.clone(),
       ))
     }
 
@@ -135,15 +135,22 @@ wrap_client! {
     }
 
     fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
-      Some(TauriCefContextMenuHandler::new(self.devtools_enabled))
+      Some(context_menu::TauriCefContextMenuHandler::new(self.devtools_enabled))
     }
 
     fn keyboard_handler(&self) -> Option<KeyboardHandler> {
-      Some(TauriCefKeyboardHandler::new(self.devtools_enabled))
+      None
     }
 
     fn permission_handler(&self) -> Option<PermissionHandler> {
       Some(TauriCefPermissionHandler::new())
+    }
+
+    fn render_handler(&self) -> Option<RenderHandler> {
+      self
+        .osr_state
+        .as_ref()
+        .map(|state| render_handler::TauriCefRenderHandler::new(state.clone()))
     }
 
     fn on_process_message_received(
