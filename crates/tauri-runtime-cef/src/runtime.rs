@@ -1052,6 +1052,12 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
         );
       }
       WinitWindowEvent::Focused(focused) => {
+        #[cfg(target_os = "linux")]
+        if self.context.osr_mode
+          && let Some(child) = appwindow.children.first()
+        {
+          child.host.set_focus(if focused { 1 } else { 0 });
+        }
         self.emit_window_event(window_id, WindowEvent::Focused(focused));
       }
       #[cfg(target_os = "linux")]
@@ -1112,7 +1118,6 @@ impl<T: UserEvent> ApplicationHandler for WinitCefApp<T> {
               | WinitWindowEvent::PointerButton { .. }
               | WinitWindowEvent::MouseWheel { .. }
               | WinitWindowEvent::KeyboardInput { .. }
-              | WinitWindowEvent::Focused(_)
           )
         {
           let modifiers = *self.modifiers.borrow();
