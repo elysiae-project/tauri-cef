@@ -131,6 +131,21 @@ impl WindowBuilder for WindowBuilderWrapper {
     if let Some(window_classname) = &config.window_classname {
       builder = builder.window_classname(window_classname);
     }
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    ))]
+    {
+      use winit::platform::wayland::WindowAttributesWayland;
+      let pl_attrs = WindowAttributesWayland::default().with_name(config.title.clone(), "");
+      builder.attrs.inner = builder
+        .attrs
+        .inner
+        .with_platform_attributes(Box::new(pl_attrs));
+    }
     if let Some(prevent_overflow) = &config.prevent_overflow {
       builder = match prevent_overflow {
         PreventOverflowConfig::Enable(true) => builder.prevent_overflow(),

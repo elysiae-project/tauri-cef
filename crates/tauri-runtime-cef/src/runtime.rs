@@ -56,6 +56,14 @@ use crate::{
 };
 #[cfg(target_os = "macos")]
 use winit::platform::macos::EventLoopBuilderExtMacOS;
+#[cfg(any(
+  target_os = "linux",
+  target_os = "dragonfly",
+  target_os = "freebsd",
+  target_os = "netbsd",
+  target_os = "openbsd"
+))]
+use winit::platform::wayland::EventLoopBuilderExtWayland;
 #[cfg(windows)]
 use winit::platform::windows::EventLoopBuilderExtWindows;
 #[cfg(any(
@@ -1298,7 +1306,6 @@ impl<T: UserEvent> CefRuntime<T> {
     });
     let _ = create_dir_all(&cache_path);
 
-    // Force X11 usage on Linux
     #[cfg(any(
       target_os = "linux",
       target_os = "dragonfly",
@@ -1307,8 +1314,23 @@ impl<T: UserEvent> CefRuntime<T> {
       target_os = "openbsd"
     ))]
     {
-      command_line_args.push(("ozone-platform".to_string(), Some("x11".to_string())));
-      event_loop_builder.with_x11();
+      let is_wayland =
+        std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("WAYLAND_SOCKET").is_ok();
+
+      if is_wayland {
+        command_line_args.push(("ozone-platform".to_string(), Some("wayland".to_string())));
+        command_line_args.push(("ignore-gpu-blocklist".to_string(), None));
+        command_line_args.push(("enable-gpu-rasterization".to_string(), None));
+        command_line_args.push(("enable-zero-copy".to_string(), None));
+        command_line_args.push((
+          "enable-features".to_string(),
+          Some("AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL,VaapiVideoDecoder,VaapiVideoEncoder,VaapiOnNvidiaGPUs,AcceleratedVideoEncoder,CanvasOopRasterization,WaylandLinuxDrmSyncobj".to_string()),
+        ));
+        event_loop_builder.with_wayland();
+      } else {
+        command_line_args.push(("ozone-platform".to_string(), Some("x11".to_string())));
+        event_loop_builder.with_x11();
+      }
     }
 
     #[cfg(windows)]
@@ -1456,6 +1478,21 @@ impl<T: UserEvent> Runtime<T> for CefRuntime<T> {
   ))]
   fn new_any_thread(args: RuntimeInitArgs<Self::PlatformSpecificInitAttribute>) -> Result<Self> {
     let mut event_loop_builder = EventLoopBuilder::default();
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    ))]
+    EventLoopBuilderExtWayland::with_any_thread(&mut event_loop_builder, true);
+    #[cfg(not(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    )))]
     event_loop_builder.with_any_thread(true);
     Self::init(event_loop_builder, args)
   }

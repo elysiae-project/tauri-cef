@@ -15,7 +15,9 @@ use super::utils::{atom, with_cef_display};
 impl AppWebview {
   fn xid(&self) -> xlib::Window {
     let xid = self.host.window_handle();
-    assert_ne!(xid, 0, "failed to get XID");
+    if xid == 0 {
+      return 0;
+    }
     xid as xlib::Window
   }
 
@@ -27,6 +29,9 @@ impl AppWebview {
 
   pub(crate) fn bounds(&self) -> Option<Rect> {
     let xid = self.xid();
+    if xid == 0 {
+      return None;
+    }
 
     with_cef_display(None, |xlib, display| unsafe {
       let mut root: xlib::Window = 0;
@@ -61,7 +66,13 @@ impl AppWebview {
 
   pub(crate) fn reparent(&self, parent: &AppWindow) {
     let xid = self.xid();
+    if xid == 0 {
+      return;
+    }
     let parent_xid = parent.xid();
+    if parent_xid == 0 {
+      return;
+    }
 
     with_cef_display((), |xlib, display| unsafe {
       (xlib.XReparentWindow)(display, xid, parent_xid as xlib::Window, 0, 0);
@@ -71,6 +82,9 @@ impl AppWebview {
 
   pub(crate) fn apply_visible(&self, visible: bool) {
     let xid = self.xid();
+    if xid == 0 {
+      return;
+    }
 
     with_cef_display((), |xlib, display| unsafe {
       let net_wm_state = atom(xlib, display, "_NET_WM_STATE");
@@ -107,6 +121,9 @@ impl AppWebview {
 
   pub(crate) fn apply_physical_bounds(&self, _scale: f64, x: i32, y: i32, width: i32, height: i32) {
     let xid = self.xid();
+    if xid == 0 {
+      return;
+    }
 
     with_cef_display((), |xlib, display| unsafe {
       (xlib.XMoveResizeWindow)(
@@ -117,8 +134,6 @@ impl AppWebview {
         width.max(1) as u32,
         height.max(1) as u32,
       );
-      // `with_cef_display` issues an `XFlush` once the closure returns, so a
-      // blocking `XSync` round-trip here just stalls every resize frame.
     });
   }
 }

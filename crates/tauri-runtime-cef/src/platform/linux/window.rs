@@ -13,18 +13,24 @@ use super::{taskbar, utils::set_wm_state};
 
 impl AppWindow {
   pub(crate) fn raw_cef_handle(&self) -> cef::sys::cef_window_handle_t {
-    self.xid() as cef::sys::cef_window_handle_t
-  }
-
-  pub(crate) fn xid(&self) -> c_ulong {
     let handle = self
       .window
       .window_handle()
       .expect("failed to get window handle");
     match handle.as_raw() {
-      RawWindowHandle::Xlib(handle) => handle.window as c_ulong,
-      RawWindowHandle::Xcb(handle) => handle.window.get() as c_ulong,
-      other => panic!("expected X11 window handle, got {other:?}"),
+      RawWindowHandle::Xlib(handle) => handle.window as cef::sys::cef_window_handle_t,
+      RawWindowHandle::Xcb(handle) => handle.window.get() as cef::sys::cef_window_handle_t,
+      RawWindowHandle::Wayland(handle) => handle.surface.as_ptr() as cef::sys::cef_window_handle_t,
+      other => panic!("expected window handle, got {other:?}"),
+    }
+  }
+
+  pub(crate) fn xid(&self) -> c_ulong {
+    let handle = self.window.window_handle().ok();
+    match handle.map(|h| h.as_raw()) {
+      Some(RawWindowHandle::Xlib(handle)) => handle.window as c_ulong,
+      Some(RawWindowHandle::Xcb(handle)) => handle.window.get() as c_ulong,
+      _ => 0,
     }
   }
 
