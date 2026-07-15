@@ -77,6 +77,8 @@ wrap_client! {
     osr_state: Option<Arc<render_handler::OsrState>>,
     proxy: WinitEventLoopProxy,
     sender: Sender<Message<T>>,
+    context_menu_callback: Arc<Mutex<Option<RunContextMenuCallback>>>,
+    inspect_point: Arc<Mutex<(i32, i32)>>,
   }
 
   impl Client {
@@ -135,7 +137,11 @@ wrap_client! {
     }
 
     fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
-      Some(context_menu::TauriCefContextMenuHandler::new(self.devtools_enabled))
+      Some(context_menu::TauriCefContextMenuHandler::new(
+        self.devtools_enabled,
+        self.context_menu_callback.clone(),
+        self.inspect_point.clone(),
+      ))
     }
 
     fn keyboard_handler(&self) -> Option<KeyboardHandler> {
@@ -155,11 +161,42 @@ wrap_client! {
 
     fn on_process_message_received(
       &self,
-      _browser: Option<&mut Browser>,
+      browser: Option<&mut Browser>,
       frame: Option<&mut Frame>,
       source_process: ProcessId,
       message: Option<&mut ProcessMessage>,
     ) -> std::os::raw::c_int {
+      if source_process == ProcessId::RENDERER
+        && let Some(msg) = message.as_ref()
+      {
+        let name = CefString::from(&msg.name()).to_string();
+        if name == "tauri:ipc"
+          && let Some(args) = msg.argument_list()
+        {
+          let body = CefString::from(&args.string(1)).to_string();
+          if let Some(rest) = body.strip_prefix("__cef_context_menu:")
+            && let Ok(command_id) = rest.parse::<i32>()
+          {
+            if let Some(cb) = self.context_menu_callback.lock().unwrap().take() {
+              if command_id == -2 {
+                cb.cancel();
+                if let Some(browser) = browser
+                  && let Some(host) = browser.host()
+                {
+                  let (x, y) = *self.inspect_point.lock().unwrap();
+                  let point = Point { x, y };
+                  host.show_dev_tools(None, None, None, Some(&point));
+                }
+              } else if command_id >= 0 {
+                cb.cont(command_id, EventFlags::default());
+              } else {
+                cb.cancel();
+              }
+            }
+            return 1;
+          }
+        }
+      }
       ipc::on_process_message_received(self, frame, source_process, message)
     }
   }

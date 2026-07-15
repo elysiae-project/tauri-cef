@@ -461,6 +461,8 @@ impl<T: UserEvent> WinitCefApp<T> {
       ))
     });
 
+    let context_menu_callback = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let inspect_point = std::sync::Arc::new(std::sync::Mutex::new((0, 0)));
     let mut client = browser_client::TauriCefBrowserClient::new(
       context.clone(),
       window_id,
@@ -475,6 +477,8 @@ impl<T: UserEvent> WinitCefApp<T> {
       osr_state.clone(),
       context.proxy.clone(),
       context.sender.clone(),
+      context_menu_callback,
+      inspect_point,
     );
 
     let cef_runtime_style = pending
