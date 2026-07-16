@@ -105,6 +105,7 @@ wrap_context_menu_handler! {
         let item_type = model.type_at(i);
         let command_id = model.command_id_at(i);
         let label = CefString::from(&model.label_at(i)).to_string();
+        let label = label.replace("&&", "\0").replace('&', "").replace('\0', "&");
         let enabled = model.is_enabled_at(i) == 1;
         let checked = model.is_checked_at(i) == 1;
 
