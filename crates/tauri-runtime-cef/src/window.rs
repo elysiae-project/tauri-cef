@@ -588,10 +588,8 @@ impl<T: UserEvent> WinitCefApp<T> {
       WindowMessage::Title(tx) => _ = tx.send(Ok(window.title())),
       WindowMessage::InnerPosition(tx) => _ = tx.send(Ok(window.surface_position())),
       WindowMessage::OuterPosition(tx) => {
-        let pos = window
-          .outer_position()
-          .map_err(|_| Error::FailedToGetMonitor);
-        let _ = tx.send(pos);
+        let pos = window.outer_position().unwrap_or_default();
+        let _ = tx.send(Ok(pos));
       }
       WindowMessage::CurrentMonitor(tx) => {
         let current = window.current_monitor();
