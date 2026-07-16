@@ -137,6 +137,9 @@ wrap_client! {
     }
 
     fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+      if !self.devtools_enabled {
+        return None;
+      }
       Some(context_menu::TauriCefContextMenuHandler::new(
         self.devtools_enabled,
         self.context_menu_callback.clone(),
