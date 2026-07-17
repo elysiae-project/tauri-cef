@@ -181,7 +181,7 @@ wrap_client! {
             && let Ok(command_id) = rest.parse::<i32>()
           {
             if let Some(cb) = self.context_menu_callback.lock().unwrap().take() {
-              if command_id == -2 {
+              if command_id == -2 && self.devtools_enabled {
                 cb.cancel();
                 if let Some(browser) = browser
                   && let Some(host) = browser.host()
