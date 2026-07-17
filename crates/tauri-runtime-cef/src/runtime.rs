@@ -1584,8 +1584,6 @@ impl<T: UserEvent> CefRuntime<T> {
 
     command_line_args.push(("--enable-media-stream".to_string(), None));
 
-    #[cfg(debug_assertions)]
-    command_line_args.push(("--remote-allow-origins".to_string(), Some("*".to_string())));
     let mut app = TauriCefApp::new(
       context.clone(),
       context_initialized.clone(),
@@ -1610,7 +1608,7 @@ impl<T: UserEvent> CefRuntime<T> {
       cache_path: cache_path.to_string_lossy().to_string().as_str().into(),
       external_message_pump: 1,
       windowless_rendering_enabled: osr_mode as i32,
-      remote_debugging_port: if cfg!(debug_assertions) { 9222 } else { 0 },
+      remote_debugging_port: 0,
       locale: cef::CefString::from("en-US"),
       accept_language_list: cef::CefString::from("en-US,en"),
       ..Default::default()
