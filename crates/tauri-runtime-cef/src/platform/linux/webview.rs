@@ -13,10 +13,16 @@ use crate::{webview::AppWebview, window::AppWindow};
 use super::utils::{atom, with_cef_display};
 
 impl AppWebview {
-  fn xid(&self) -> xlib::Window {
+  fn xid(&self) -> Option<c_ulong> {
     let xid = self.host.window_handle();
-    assert_ne!(xid, 0, "failed to get XID");
-    xid as xlib::Window
+    if xid == 0 {
+      return None;
+    }
+    // Check if we're on X11 by querying CEF's X display
+    if cef::get_xdisplay().is_null() {
+      return None;
+    }
+    Some(xid as c_ulong)
   }
 
   pub(crate) fn set_background_color(&self, color: Option<Color>) {
@@ -35,7 +41,9 @@ impl AppWebview {
       });
     }
 
-    let xid = self.xid();
+    let Some(xid) = self.xid() else {
+      return None;
+    };
 
     with_cef_display(None, |xlib, display| unsafe {
       let mut root: xlib::Window = 0;
@@ -48,7 +56,7 @@ impl AppWebview {
 
       if (xlib.XGetGeometry)(
         display,
-        xid,
+        xid as xlib::Window,
         &mut root,
         &mut x,
         &mut y,
@@ -73,14 +81,22 @@ impl AppWebview {
       return;
     }
 
-    let xid = self.xid();
+    let Some(xid) = self.xid() else {
+      return;
+    };
     let Some(parent_xid) = parent.xid() else {
       return;
     };
 
     with_cef_display((), |xlib, display| unsafe {
-      (xlib.XReparentWindow)(display, xid, parent_xid as xlib::Window, 0, 0);
-      (xlib.XMapRaised)(display, xid);
+      (xlib.XReparentWindow)(
+        display,
+        xid as xlib::Window,
+        parent_xid as xlib::Window,
+        0,
+        0,
+      );
+      (xlib.XMapRaised)(display, xid as xlib::Window);
     });
   }
 
@@ -89,7 +105,9 @@ impl AppWebview {
       return;
     }
 
-    let xid = self.xid();
+    let Some(xid) = self.xid() else {
+      return;
+    };
 
     with_cef_display((), |xlib, display| unsafe {
       let net_wm_state = atom(xlib, display, "_NET_WM_STATE");
@@ -98,7 +116,7 @@ impl AppWebview {
       if visible {
         (xlib.XChangeProperty)(
           display,
-          xid,
+          xid as xlib::Window,
           net_wm_state,
           xlib::XA_ATOM,
           32,
@@ -106,12 +124,12 @@ impl AppWebview {
           std::ptr::null(),
           0,
         );
-        (xlib.XMapWindow)(display, xid);
+        (xlib.XMapWindow)(display, xid as xlib::Window);
       } else {
         let hidden: [c_ulong; 1] = [atom(xlib, display, "_NET_WM_STATE_HIDDEN")];
         (xlib.XChangeProperty)(
           display,
-          xid,
+          xid as xlib::Window,
           net_wm_state,
           xlib::XA_ATOM,
           32,
@@ -119,7 +137,7 @@ impl AppWebview {
           hidden.as_ptr() as *const u8,
           1,
         );
-        (xlib.XUnmapWindow)(display, xid);
+        (xlib.XUnmapWindow)(display, xid as xlib::Window);
       }
     });
   }
@@ -140,12 +158,14 @@ impl AppWebview {
       return;
     }
 
-    let xid = self.xid();
+    let Some(xid) = self.xid() else {
+      return;
+    };
 
     with_cef_display((), |xlib, display| unsafe {
       (xlib.XMoveResizeWindow)(
         display,
-        xid,
+        xid as xlib::Window,
         x,
         y,
         width.max(1) as u32,

@@ -1473,8 +1473,7 @@ impl<T: UserEvent> CefRuntime<T> {
       target_os = "netbsd",
       target_os = "openbsd"
     ))]
-    let osr_mode =
-      std::env::var("WAYLAND_DISPLAY").is_ok() && std::env::var("ELYSIAE_FORCE_X11").is_err();
+    let force_osr = std::env::var("ELYSIAE_CEF_OSR").is_ok();
 
     #[cfg(not(any(
       target_os = "linux",
@@ -1483,7 +1482,17 @@ impl<T: UserEvent> CefRuntime<T> {
       target_os = "netbsd",
       target_os = "openbsd"
     )))]
-    let osr_mode = false;
+    let force_osr = false;
+
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    ))]
+    let use_wayland =
+      std::env::var("WAYLAND_DISPLAY").is_ok() && std::env::var("ELYSIAE_FORCE_X11").is_err();
 
     command_line_args.push(("--lang".to_string(), Some("en-US".to_string())));
 
@@ -1495,10 +1504,6 @@ impl<T: UserEvent> CefRuntime<T> {
       target_os = "openbsd"
     ))]
     {
-      let use_wayland = osr_mode
-        || (std::env::var("WAYLAND_DISPLAY").is_ok()
-          && std::env::var("ELYSIAE_FORCE_X11").is_err());
-
       if use_wayland {
         unsafe {
           std::env::set_var("GDK_BACKEND", "wayland");
@@ -1513,7 +1518,7 @@ impl<T: UserEvent> CefRuntime<T> {
     }
 
     #[cfg(target_os = "linux")]
-    let gpu_ctx = if osr_mode {
+    let gpu_ctx = if force_osr {
       crate::platform::linux::gpu::GpuContext::new()
     } else {
       None
@@ -1549,7 +1554,7 @@ impl<T: UserEvent> CefRuntime<T> {
       app_wide_theme: Default::default(),
       cef_pump,
       cache_path: Arc::new(cache_path.clone()),
-      osr_mode,
+      osr_mode: force_osr,
       #[cfg(target_os = "linux")]
       gpu_ctx,
       #[cfg(any(
@@ -1572,7 +1577,7 @@ impl<T: UserEvent> CefRuntime<T> {
       target_os = "netbsd",
       target_os = "openbsd"
     ))]
-    if osr_mode {
+    if force_osr {
       let mut capture = ScaleCapture { scale: None };
       event_loop.pump_app_events(None, &mut capture);
       if let Some(scale) = capture.scale
@@ -1607,7 +1612,7 @@ impl<T: UserEvent> CefRuntime<T> {
       no_sandbox: !cfg!(feature = "sandbox") as i32,
       cache_path: cache_path.to_string_lossy().to_string().as_str().into(),
       external_message_pump: 1,
-      windowless_rendering_enabled: osr_mode as i32,
+      windowless_rendering_enabled: force_osr as i32,
       remote_debugging_port: 0,
       locale: cef::CefString::from("en-US"),
       accept_language_list: cef::CefString::from("en-US,en"),
